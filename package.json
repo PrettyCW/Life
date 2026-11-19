@@ -1,0 +1,8 @@
+{
+  "name": "life-square-game",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Infinite square-flipping puzzle",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=20" }
+}
