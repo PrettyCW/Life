@@ -14,13 +14,16 @@
   </style>
 </head>
 <body>
-  <p class="sr-only" id="instructions">Click a white square to turn it black and toggle the squares directly above, below, left, and right. Drag from a black square to pan freely around the infinite board. Press R to reset.</p>
+  <p class="sr-only" id="instructions">Click a white square to turn it black and toggle the squares directly above, below, left, and right. Drag from a black square to pan freely around the infinite board. Use the scroll wheel to gently zoom in and out around your cursor. Press R to reset.</p>
   <canvas id="board" aria-label="Infinite square-flipping game" aria-describedby="instructions"></canvas>
   <script>
     (() => {
       'use strict';
 
       const SIZE = 32;
+      const MIN_ZOOM = 0.35;
+      const MAX_ZOOM = 4;
+      const ZOOM_SENSITIVITY = 0.00065; // A gentle ~6% change per wheel notch
       const canvas = document.getElementById('board');
       const ctx = canvas.getContext('2d', { alpha: false });
       const white = new Set(['0,0']);
@@ -28,20 +31,38 @@
       const key = (x, y) => `${x},${y}`;
       let width = 0, height = 0, originX = 0, originY = 0;
       let initialized = false, pointer = null, frame = 0;
+      let scale = 1, targetScale = 1, zoomAnchorX = 0, zoomAnchorY = 0;
 
       function render() {
         frame = 0;
+        // Ease toward the requested zoom, preserving the point beneath the cursor.
+        if (Math.abs(targetScale - scale) > 0.0001) {
+          const nextScale = scale + (targetScale - scale) * 0.18;
+          const ratio = nextScale / scale;
+          originX = zoomAnchorX - (zoomAnchorX - originX) * ratio;
+          originY = zoomAnchorY - (zoomAnchorY - originY) * ratio;
+          scale = nextScale;
+        } else if (scale !== targetScale) {
+          const ratio = targetScale / scale;
+          originX = zoomAnchorX - (zoomAnchorX - originX) * ratio;
+          originY = zoomAnchorY - (zoomAnchorY - originY) * ratio;
+          scale = targetScale;
+        }
         ctx.fillStyle = '#000';
         ctx.fillRect(0, 0, width, height);
         ctx.fillStyle = '#fff';
         for (const cell of white) {
           const [x, y] = cell.split(',').map(Number);
-          const left = originX + x * SIZE;
-          const top = originY + y * SIZE;
-          if (left + SIZE > 0 && left < width && top + SIZE > 0 && top < height) {
-            ctx.fillRect(left, top, SIZE, SIZE);
+          const size = SIZE * scale;
+          const left = originX + x * size;
+          const top = originY + y * size;
+          if (left + size > 0 && left < width && top + size > 0 && top < height) {
+            // Overlapping fractional-pixel edges keeps neighboring white cells seamless.
+            const rx = Math.floor(left), ry = Math.floor(top);
+            ctx.fillRect(rx, ry, Math.ceil(left + size) - rx, Math.ceil(top + size) - ry);
           }
         }
+        if (scale !== targetScale) draw();
       }
 
       function draw() {
@@ -51,8 +72,8 @@
       function resize() {
         const newWidth = window.innerWidth, newHeight = window.innerHeight;
         if (!initialized) {
-          originX = Math.floor((newWidth - SIZE) / 2);
-          originY = Math.floor((newHeight - SIZE) / 2);
+          originX = Math.floor((newWidth - SIZE * scale) / 2);
+          originY = Math.floor((newHeight - SIZE * scale) / 2);
           initialized = true;
         } else {
           originX += (newWidth - width) / 2;
@@ -70,8 +91,8 @@
       function cellAt(clientX, clientY) {
         const bounds = canvas.getBoundingClientRect();
         return {
-          x: Math.floor((clientX - bounds.left - originX) / SIZE),
-          y: Math.floor((clientY - bounds.top - originY) / SIZE)
+          x: Math.floor((clientX - bounds.left - originX) / (SIZE * scale)),
+          y: Math.floor((clientY - bounds.top - originY) / (SIZE * scale))
         };
       }
 
@@ -80,6 +101,18 @@
         if (white.has(cell)) white.delete(cell);
         else white.add(cell);
       }
+
+      canvas.addEventListener('wheel', event => {
+        event.preventDefault(); // Wheel zooms the board, never scrolls the page.
+        const rect = canvas.getBoundingClientRect();
+        zoomAnchorX = event.clientX - rect.left;
+        zoomAnchorY = event.clientY - rect.top;
+        // Wheel events may use pixels, lines, or pages.
+        const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? height : 1);
+        targetScale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM,
+          targetScale * Math.exp(-Math.max(-160, Math.min(160, delta)) * ZOOM_SENSITIVITY)));
+        draw();
+      }, { passive: false });
 
       canvas.addEventListener('pointerdown', event => {
         if (pointer || (event.pointerType === 'mouse' && event.button !== 0)) return;
@@ -131,6 +164,7 @@
         if (event.key.toLowerCase() === 'r' && !event.repeat) {
           white.clear();
           white.add('0,0');
+          scale = targetScale = 1;
           originX = Math.floor((width - SIZE) / 2);
           originY = Math.floor((height - SIZE) / 2);
           draw();
