@@ -1,208 +1,528 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#000000" />
-  <meta name="description" content="One white square. Click it and watch the pattern grow." />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <meta name="description" content="Life: one square, infinite possibilities.">
   <title>Life</title>
   <style>
-    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #000; }
-    body { overscroll-behavior: none; }
-    canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; outline: none; }
-    .controls { position: fixed; top: max(12px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right)); z-index: 1; display: flex; gap: 8px; }
-    .controls button { appearance: none; border: 1px solid rgba(255,255,255,.27); border-radius: 5px; padding: 7px 12px; background: rgba(0,0,0,.82); color: #fff; font: 500 12px/1.2 system-ui, sans-serif; cursor: pointer; }
-    .controls button:hover, .controls button:focus-visible { background: #252525; border-color: rgba(255,255,255,.65); }
-    .controls button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
-    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+    :root { color-scheme: dark; }
+    html, body { width:100%; height:100%; margin:0; overflow:hidden; background:#000; }
+    body { overscroll-behavior:none; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    canvas { display:block; width:100%; height:100%; touch-action:none; cursor:grab; outline:none; }
+    button, summary { font:500 12px/1.3 system-ui,-apple-system,sans-serif; }
+    button { cursor:pointer; }
+    button:disabled { opacity:.35; cursor:not-allowed; }
+    .menu { position:fixed; z-index:5; top:max(12px,env(safe-area-inset-top)); right:max(12px,env(safe-area-inset-right)); color:#fff; }
+    .menu > summary { cursor:pointer; user-select:none; list-style:none; padding:8px 13px; border:1px solid #555; border-radius:6px; background:#080808ec; text-align:center; }
+    .menu > summary::-webkit-details-marker { display:none; }
+    .menu[open] > summary { border-color:#999; }
+    .menu-items { position:absolute; top:calc(100% + 6px); right:0; min-width:170px; padding:5px; border:1px solid #444; border-radius:7px; background:#101010f5; box-shadow:0 10px 30px #0009; }
+    .menu-items button { display:block; width:100%; padding:9px 11px; border:0; border-radius:4px; background:transparent; color:white; text-align:left; }
+    .menu-items button:hover:not(:disabled),.menu-items button:focus-visible { background:#303030; }
+    .menu-items hr { margin:5px 7px; border:0; border-top:1px solid #333; }
+    .menu > summary:focus-visible, button:focus-visible, textarea:focus-visible { outline:2px solid #fff; outline-offset:2px; }
+    #counter { position:fixed; z-index:2; bottom:max(14px,env(safe-area-inset-bottom)); left:max(14px,env(safe-area-inset-left)); color:#999; font:400 11px/1.3 system-ui,sans-serif; pointer-events:none; user-select:none; font-variant-numeric:tabular-nums; }
+    #toast { position:fixed; z-index:8; bottom:max(40px,env(safe-area-inset-bottom)); left:50%; transform:translateX(-50%); max-width:min(90vw,500px); padding:9px 14px; border:1px solid #454545; border-radius:7px; color:#fff; background:#181818ee; font-size:12px; text-align:center; pointer-events:none; opacity:0; transition:opacity .2s; }
+    #toast.visible { opacity:1; }
+    dialog { box-sizing:border-box; width:min(520px,calc(100vw - 32px)); max-height:calc(100vh - 36px); padding:19px; border:1px solid #555; border-radius:10px; background:#101010; color:#fff; box-shadow:0 20px 65px #000b; }
+    dialog::backdrop { background:#000b; }
+    dialog h2 { margin:0 0 7px; font-size:16px; font-weight:600; }
+    dialog p { margin:0 0 13px; font-size:12px; line-height:1.5; color:#aaa; }
+    dialog textarea { box-sizing:border-box; width:100%; min-height:148px; max-height:40vh; padding:10px; resize:vertical; background:#050505; border:1px solid #555; border-radius:5px; color:#ddd; font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace; }
+    .dialog-actions { display:flex; justify-content:flex-end; gap:9px; margin-top:12px; }
+    .dialog-actions button { padding:8px 13px; border:1px solid #555; border-radius:5px; background:#222; color:white; }
+    .dialog-actions .primary { background:#eee; border-color:#eee; color:#080808; }
+    .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
   </style>
 </head>
 <body>
-  <p class="sr-only" id="instructions">Click a white square to turn it black and toggle the squares directly above, below, left, and right. Drag from a black square to pan freely around the infinite board. Use the scroll wheel to gently zoom in and out around your cursor. Home returns to the original center and zoom. Open finds a random white square and centers it at the original zoom. Press R to reset.</p>
-  <nav class="controls" aria-label="View controls">
-    <button type="button" id="open" title="Jump to a random white square">Open</button>
-    <button type="button" id="home" title="Return to the original center">Home</button>
-  </nav>
+  <p class="sr-only" id="instructions">Click a white square to turn it black and flip the four adjacent squares. Drag from black to pan, and fling to coast. Use the wheel to zoom. Menu contains Home, Square, saving, import/export, and World Snapshot. R starts a new world with confirmation.</p>
   <canvas id="board" aria-label="Infinite square-flipping game" aria-describedby="instructions"></canvas>
+  <details class="menu" id="menu">
+    <summary>Menu ▾</summary>
+    <div class="menu-items">
+      <button id="home" type="button">Home</button>
+      <button id="square" type="button">Square</button>
+      <hr>
+      <button id="save" type="button">Save World</button>
+      <button id="export" type="button">Export Code</button>
+      <button id="import" type="button">Import Code</button>
+      <button id="snapshot" type="button">World Snapshot</button>
+      <hr>
+      <button id="new-world" type="button">New World</button>
+    </div>
+  </details>
+  <div id="counter" aria-live="off">1 white square</div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <dialog id="code-dialog" aria-labelledby="code-title">
+    <h2 id="code-title">Export Code</h2>
+    <p id="code-hint"></p>
+    <textarea id="code-text" spellcheck="false" autocorrect="off" autocapitalize="off" aria-label="World code"></textarea>
+    <div class="dialog-actions">
+      <button id="code-close" type="button">Close</button>
+      <button id="code-action" class="primary" type="button">Copy Code</button>
+    </div>
+  </dialog>
   <script>
-    (() => {
-      'use strict';
+(() => {
+  'use strict';
 
-      const SIZE = 32;
-      const MIN_ZOOM = 0.035;
-      const MAX_ZOOM = 40;
-      const ZOOM_SENSITIVITY = 0.00065; // A gentle ~6% change per wheel notch
-      const canvas = document.getElementById('board');
-      const ctx = canvas.getContext('2d', { alpha: false });
-      const white = new Set(['0,0']);
-      const neighbors = [[0, -1], [1, 0], [0, 1], [-1, 0]];
-      const key = (x, y) => `${x},${y}`;
-      let width = 0, height = 0, originX = 0, originY = 0;
-      let initialized = false, pointer = null, frame = 0;
-      let scale = 1, targetScale = 1, zoomAnchorX = 0, zoomAnchorY = 0;
+  const SIZE = 32;
+  const MIN_ZOOM = 0.035;
+  const MAX_ZOOM = 40;
+  const ZOOM_SENSITIVITY = 0.00065;
+  const STORAGE_KEY = 'life.world.v1';
+  const MAX_CELLS = 500000;
+  const MAX_CODE_LENGTH = 10000000;
+  const neighbors = [[0,-1], [1,0], [0,1], [-1,0]];
+  const canvas = document.getElementById('board');
+  const ctx = canvas.getContext('2d', {alpha:false});
+  const menu = document.getElementById('menu');
+  const counter = document.getElementById('counter');
+  const toastElement = document.getElementById('toast');
+  const dialog = document.getElementById('code-dialog');
+  const codeTitle = document.getElementById('code-title');
+  const codeHint = document.getElementById('code-hint');
+  const codeText = document.getElementById('code-text');
+  const codeAction = document.getElementById('code-action');
 
-      function render() {
-        frame = 0;
-        // Ease toward the requested zoom, preserving the point beneath the cursor.
-        if (Math.abs(targetScale - scale) > 0.0001) {
-          const nextScale = scale + (targetScale - scale) * 0.18;
-          const ratio = nextScale / scale;
-          originX = zoomAnchorX - (zoomAnchorX - originX) * ratio;
-          originY = zoomAnchorY - (zoomAnchorY - originY) * ratio;
-          scale = nextScale;
-        } else if (scale !== targetScale) {
-          const ratio = targetScale / scale;
-          originX = zoomAnchorX - (zoomAnchorX - originX) * ratio;
-          originY = zoomAnchorY - (zoomAnchorY - originY) * ratio;
-          scale = targetScale;
+  const key = (x,y) => x + ',' + y;
+  const white = new Set(['0,0']);
+  let width=0, height=0, originX=0, originY=0, scale=1;
+  let targetX=0, targetY=0, targetScale=1;
+  let velocityX=0, velocityY=0, pointer=null;
+  let initialized=false, frame=0, lastFrame=0, saveTimer=0, toastTimer=0, codeMode='export';
+
+  function toast(message) {
+    toastElement.textContent = message;
+    toastElement.classList.add('visible');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastElement.classList.remove('visible'), 3500);
+  }
+
+  function updateCounter() {
+    const amount = white.size;
+    counter.textContent = amount.toLocaleString() + ' white square' + (amount === 1 ? '' : 's');
+    document.getElementById('square').disabled = !amount;
+  }
+
+  function paint(now) {
+    frame = 0;
+    const dt = Math.min(42, Math.max(1, lastFrame ? now-lastFrame : 16));
+    lastFrame = now;
+    const easing = 1 - Math.exp(-dt / 175);
+
+    if (!pointer || pointer.whiteCell) {
+      if (Math.abs(velocityX) > 0.015 || Math.abs(velocityY) > 0.015) {
+        originX += velocityX * dt;
+        originY += velocityY * dt;
+        targetX = originX;
+        targetY = originY;
+        const drag = Math.exp(-dt / 320);
+        velocityX *= drag;
+        velocityY *= drag;
+        if (Math.abs(velocityX) <= 0.015 && Math.abs(velocityY) <= 0.015) {
+          velocityX=0; velocityY=0;
+          scheduleSave();
         }
-        ctx.fillStyle = '#000';
-        ctx.fillRect(0, 0, width, height);
-        ctx.fillStyle = '#fff';
-        for (const cell of white) {
-          const [x, y] = cell.split(',').map(Number);
-          const size = SIZE * scale;
-          const left = originX + x * size;
-          const top = originY + y * size;
-          if (left + size > 0 && left < width && top + size > 0 && top < height) {
-            // Overlapping fractional-pixel edges keeps neighboring white cells seamless.
-            const rx = Math.floor(left), ry = Math.floor(top);
-            ctx.fillRect(rx, ry, Math.ceil(left + size) - rx, Math.ceil(top + size) - ry);
-          }
-        }
-        if (scale !== targetScale) draw();
+      } else {
+        velocityX=0; velocityY=0;
+        originX += (targetX-originX)*easing;
+        originY += (targetY-originY)*easing;
+        scale += (targetScale-scale)*easing;
+        if (Math.abs(originX-targetX)<0.02) originX=targetX;
+        if (Math.abs(originY-targetY)<0.02) originY=targetY;
+        if (Math.abs(scale-targetScale)<0.00002) scale=targetScale;
       }
+    }
+    ctx.fillStyle='#000';
+    ctx.fillRect(0,0,width,height);
+    ctx.fillStyle='#fff';
+    const size=SIZE*scale;
+    for (const cell of white) {
+      const comma = cell.indexOf(',');
+      const x=Number(cell.slice(0,comma));
+      const y=Number(cell.slice(comma+1));
+      const left=originX+x*size, top=originY+y*size;
+      if (left+size<=0 || left>=width || top+size<=0 || top>=height) continue;
+      const px=Math.floor(left), py=Math.floor(top);
+      ctx.fillRect(px,py,Math.ceil(left+size)-px,Math.ceil(top+size)-py);
+    }
+    if (velocityX || velocityY || originX !== targetX || originY !== targetY || scale !== targetScale) draw();
+  }
 
-      function draw() {
-        if (!frame) frame = requestAnimationFrame(render);
+  function draw() {
+    if (!frame) frame=requestAnimationFrame(paint);
+  }
+
+  function centerInstant(x,y,z) {
+    velocityX=velocityY=0;
+    scale=targetScale=z;
+    originX=targetX=width/2-(x+0.5)*SIZE*z;
+    originY=targetY=height/2-(y+0.5)*SIZE*z;
+    draw();
+  }
+
+  function centerTravel(x,y) {
+    velocityX=velocityY=0;
+    targetScale=1;
+    targetX=width/2-(x+0.5)*SIZE;
+    targetY=height/2-(y+0.5)*SIZE;
+    draw();
+    scheduleSave();
+  }
+
+  function resize() {
+    const newWidth=window.innerWidth, newHeight=window.innerHeight;
+    if (!initialized) {
+      originX=targetX=(newWidth-SIZE)/2;
+      originY=targetY=(newHeight-SIZE)/2;
+      initialized=true;
+    } else {
+      const dx=(newWidth-width)/2, dy=(newHeight-height)/2;
+      originX+=dx; targetX+=dx; originY+=dy; targetY+=dy;
+    }
+    width=newWidth; height=newHeight;
+    const ratio=Math.min(window.devicePixelRatio||1,3);
+    canvas.width=Math.round(width*ratio);
+    canvas.height=Math.round(height*ratio);
+    ctx.setTransform(ratio,0,0,ratio,0,0);
+    draw();
+  }
+
+  function cellAt(clientX,clientY) {
+    const bounds=canvas.getBoundingClientRect();
+    return {
+      x:Math.floor((clientX-bounds.left-originX)/(SIZE*scale)),
+      y:Math.floor((clientY-bounds.top-originY)/(SIZE*scale))
+    };
+  }
+
+  function flip(x,y) {
+    const cell=key(x,y);
+    if (white.has(cell)) white.delete(cell);
+    else white.add(cell);
+  }
+
+  function currentState() {
+    const duringFling=velocityX!==0 || velocityY!==0;
+    const x=duringFling ? originX : targetX;
+    const y=duringFling ? originY : targetY;
+    const zoom=duringFling ? scale : targetScale;
+    return {
+      v:1,
+      c:Array.from(white,cell=>cell.split(',').map(Number)),
+      view:{ x:(width/2-x)/(SIZE*zoom)-0.5, y:(height/2-y)/(SIZE*zoom)-0.5, z:zoom }
+    };
+  }
+
+  function validatedState(data) {
+    if (!data || data.v!==1 || !Array.isArray(data.c) || data.c.length>MAX_CELLS) {
+      throw new Error('Not a supported Life world code.');
+    }
+    const cells=new Set();
+    for (const coords of data.c) {
+      if (!Array.isArray(coords) || coords.length!==2 || !coords.every(n=>Number.isSafeInteger(n)&&Math.abs(n)<=100000000)) {
+        throw new Error('World code contains invalid square coordinates.');
       }
+      cells.add(key(coords[0],coords[1]));
+    }
+    let x=0,y=0,z=1;
+    if (data.view && typeof data.view==='object') {
+      const v=data.view;
+      if (Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z)
+          && Math.abs(v.x)<100000001 && Math.abs(v.y)<100000001) {
+        x=v.x; y=v.y; z=Math.max(MIN_ZOOM,Math.min(MAX_ZOOM,v.z));
+      }
+    }
+    return {cells,x,y,z};
+  }
 
-      function resize() {
-        const newWidth = window.innerWidth, newHeight = window.innerHeight;
-        if (!initialized) {
-          originX = Math.floor((newWidth - SIZE * scale) / 2);
-          originY = Math.floor((newHeight - SIZE * scale) / 2);
-          initialized = true;
-        } else {
-          originX += (newWidth - width) / 2;
-          originY += (newHeight - height) / 2;
+  function applyState(state) {
+    white.clear();
+    for (const cell of state.cells) white.add(cell);
+    centerInstant(state.x,state.y,state.z);
+    updateCounter();
+  }
+
+  function saveWorld(manual=false) {
+    clearTimeout(saveTimer);
+    saveTimer=0;
+    try {
+      localStorage.setItem(STORAGE_KEY,JSON.stringify(currentState()));
+      if (manual) toast('World saved on this device.');
+    } catch(err) {
+      toast('Could not save locally. Export your world code for a backup.');
+      console.warn('Life save failed:',err);
+    }
+  }
+
+  function scheduleSave() {
+    clearTimeout(saveTimer);
+    saveTimer=setTimeout(() => saveWorld(), 650);
+  }
+
+  function restoreWorld() {
+    try {
+      const raw=localStorage.getItem(STORAGE_KEY);
+      if (raw) applyState(validatedState(JSON.parse(raw)));
+    } catch(err) {
+      console.warn('Life restore failed:',err);
+      toast('Saved world could not be loaded. Starting from one square.');
+    }
+  }
+
+  function base64url(bytes) {
+    let binary='';
+    for(let i=0;i<bytes.length;i+=8192) {
+      binary+=String.fromCharCode(...bytes.subarray(i,i+8192));
+    }
+    return btoa(binary).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+  }
+
+  function fromBase64url(base64) {
+    if(!/^[a-zA-Z0-9_-]+$/.test(base64)) throw new Error('Invalid code encoding.');
+    const text=atob(base64.replace(/-/g,'+').replace(/_/g,'/').padEnd(Math.ceil(base64.length/4)*4,'='));
+    return Uint8Array.from(text,c=>c.charCodeAt(0));
+  }
+
+  async function makeCode() {
+    const bytes=new TextEncoder().encode(JSON.stringify(currentState()));
+    if(typeof CompressionStream!=='undefined') {
+      const compressed=await new Response(new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer();
+      return 'LIFE1G.'+base64url(new Uint8Array(compressed));
+    }
+    return 'LIFE1.'+base64url(bytes);
+  }
+
+  async function readCode(code) {
+    const clean=code.replace(/\s/g,'');
+    if(clean.length>MAX_CODE_LENGTH) throw new Error('Code is too large.');
+    let bytes, zipped=false;
+    if(clean.startsWith('LIFE1G.')) {
+      bytes=fromBase64url(clean.slice(7));
+      zipped=true;
+    } else if(clean.startsWith('LIFE1.')) {
+      bytes=fromBase64url(clean.slice(6));
+    } else throw new Error('This is not a Life code.');
+    if(zipped) {
+      if(typeof DecompressionStream==='undefined') throw new Error('This browser cannot open compressed Life codes.');
+      bytes=new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
+    }
+    if(bytes.byteLength>30000000) throw new Error('World code is too large.');
+    return validatedState(JSON.parse(new TextDecoder().decode(bytes)));
+  }
+
+  function closeMenu() { menu.open=false; }
+
+  async function showCode(mode) {
+    codeMode=mode;
+    codeTitle.textContent=mode==='export'?'Export Code':'Import Code';
+    codeHint.textContent=mode==='export'
+      ? 'Copy this code to share your entire world, including its camera position.'
+      : 'Paste a Life code. Importing replaces the world currently saved on this device.';
+    codeAction.textContent=mode==='export'?'Copy Code':'Import World';
+    codeAction.disabled=mode==='export';
+    codeText.value=mode==='export'?'Preparing code...':'';
+    codeText.readOnly=mode==='export';
+    dialog.showModal();
+    if(mode==='export') {
+      try {
+        const code=await makeCode();
+        if(dialog.open && codeMode==='export') {
+          codeText.value=code;
+          codeAction.disabled=false;
+          codeText.select();
         }
-        width = newWidth;
-        height = newHeight;
-        const ratio = Math.min(window.devicePixelRatio || 1, 3);
-        canvas.width = Math.round(width * ratio);
-        canvas.height = Math.round(height * ratio);
-        ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      } catch(err) {
+        codeText.value='';
+        toast('Could not export code.');
+        console.error(err);
+      }
+    } else codeText.focus();
+  }
+
+  async function runCodeAction() {
+    if(codeMode==='export') {
+      try {
+        await navigator.clipboard.writeText(codeText.value);
+        toast('World code copied.');
+      } catch(err) {
+        codeText.focus();codeText.select();
+        toast('Select and copy the code manually.');
+      }
+    } else {
+      codeAction.disabled=true;
+      try {
+        const data=await readCode(codeText.value.trim());
+        if(!window.confirm('Replace your current world with the imported world?')) return;
+        applyState(data);
+        saveWorld();
+        dialog.close();
+        toast('World imported.');
+      } catch(err) {
+        toast(err.message||'Invalid Life code.');
+      } finally {codeAction.disabled=false;}
+    }
+  }
+
+  function worldSnapshot() {
+    if(!white.size) {toast('No white squares to capture.');return;}
+    let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+    for(const cell of white) {
+      const [x,y]=cell.split(',').map(Number);
+      minX=Math.min(minX,x);maxX=Math.max(maxX,x);
+      minY=Math.min(minY,y);maxY=Math.max(maxY,y);
+    }
+    const pad=2;
+    const cols=maxX-minX+1+pad*2,rows=maxY-minY+1+pad*2;
+    const cellSize=Math.min(32,4096/cols,4096/rows);
+    const snapshot=document.createElement('canvas');
+    snapshot.width=Math.max(1,Math.ceil(cols*cellSize));
+    snapshot.height=Math.max(1,Math.ceil(rows*cellSize));
+    const g=snapshot.getContext('2d');
+    g.fillStyle='#000'; g.fillRect(0,0,snapshot.width,snapshot.height);
+    g.fillStyle='#fff';
+    for(const cell of white) {
+      const [x,y]=cell.split(',').map(Number);
+      const left=(x-minX+pad)*cellSize, top=(y-minY+pad)*cellSize;
+      const px=Math.floor(left),py=Math.floor(top);
+      g.fillRect(px,py,Math.max(1,Math.ceil(left+cellSize)-px),Math.max(1,Math.ceil(top+cellSize)-py));
+    }
+    snapshot.toBlob(blob=>{
+      if(!blob) {toast('Could not create snapshot.');return;}
+      const url=URL.createObjectURL(blob);
+      const link=document.createElement('a');
+      link.download='Life-World-Snapshot-'+new Date().toISOString().slice(0,10)+'.png';
+      link.href=url;document.body.appendChild(link);link.click();link.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),30000);
+      toast('World Snapshot downloaded.');
+    },'image/png');
+  }
+
+  function newWorld() {
+    if(!window.confirm('Start a new world? Your current world will be replaced. Export a code first to keep a copy.')) return;
+    white.clear();white.add('0,0');
+    centerInstant(0,0,1);
+    updateCounter();saveWorld();
+    toast('New world started.');
+  }
+
+  // Smooth zoom anchored at the pointer. The page itself never scrolls.
+  canvas.addEventListener('wheel',event=>{
+    event.preventDefault();
+    const rect=canvas.getBoundingClientRect();
+    const px=event.clientX-rect.left,py=event.clientY-rect.top;
+    const delta=event.deltaY*(event.deltaMode===1?16:event.deltaMode===2?height:1);
+    const next=Math.max(MIN_ZOOM,Math.min(MAX_ZOOM,
+      targetScale*Math.exp(-Math.max(-160,Math.min(160,delta))*ZOOM_SENSITIVITY)));
+    const ratio=next/targetScale;
+    targetX=px-(px-targetX)*ratio;
+    targetY=py-(py-targetY)*ratio;
+    targetScale=next;
+    velocityX=velocityY=0;
+    draw();scheduleSave();
+  },{passive:false});
+
+  canvas.addEventListener('pointerdown',event=>{
+    if(pointer||(event.pointerType==='mouse'&&event.button!==0)) return;
+    event.preventDefault();
+    const {x,y}=cellAt(event.clientX,event.clientY);
+    const isWhite=white.has(key(x,y));
+    if(!isWhite) {
+      velocityX=velocityY=0;
+      targetX=originX;targetY=originY;targetScale=scale;
+    }
+    pointer={
+      id:event.pointerId,x:event.clientX,y:event.clientY,
+      lastX:event.clientX,lastY:event.clientY,lastTime:performance.now(),
+      vx:0,vy:0,moved:false,whiteCell:isWhite,cellX:x,cellY:y
+    };
+    canvas.setPointerCapture(event.pointerId);
+    canvas.style.cursor=isWhite?'pointer':'grabbing';
+  });
+
+  canvas.addEventListener('pointermove',event=>{
+    if(pointer&&pointer.id===event.pointerId) {
+      const p=pointer,now=performance.now();
+      if(Math.hypot(event.clientX-p.x,event.clientY-p.y)>5) p.moved=true;
+      if(!p.whiteCell) {
+        const dx=event.clientX-p.lastX,dy=event.clientY-p.lastY;
+        originX+=dx;originY+=dy;
+        targetX=originX;targetY=originY;
+        const dt=Math.max(8,now-p.lastTime);
+        p.vx=Math.max(-3,Math.min(3,0.5*p.vx+0.5*(dx/dt)));
+        p.vy=Math.max(-3,Math.min(3,0.5*p.vy+0.5*(dy/dt)));
         draw();
       }
+      p.lastX=event.clientX;p.lastY=event.clientY;p.lastTime=now;
+    } else if(!pointer) {
+      const {x,y}=cellAt(event.clientX,event.clientY);
+      canvas.style.cursor=white.has(key(x,y))?'pointer':'grab';
+    }
+  });
 
-      function cellAt(clientX, clientY) {
-        const bounds = canvas.getBoundingClientRect();
-        return {
-          x: Math.floor((clientX - bounds.left - originX) / (SIZE * scale)),
-          y: Math.floor((clientY - bounds.top - originY) / (SIZE * scale))
-        };
+  function finishPointer(event) {
+    if(!pointer||pointer.id!==event.pointerId)return;
+    const p=pointer;pointer=null;
+    if(p.whiteCell&&!p.moved&&event.type==='pointerup') {
+      const {x,y}=cellAt(event.clientX,event.clientY);
+      if(x===p.cellX&&y===p.cellY&&white.has(key(x,y))) {
+        white.delete(key(x,y));
+        for(const [dx,dy] of neighbors)flip(x+dx,y+dy);
+        updateCounter();draw();scheduleSave();
       }
-
-      // Recenter the camera without changing which squares are white.
-      function centerOn(x, y) {
-        scale = targetScale = 1;
-        originX = (width - SIZE) / 2 - x * SIZE;
-        originY = (height - SIZE) / 2 - y * SIZE;
+    } else if(!p.whiteCell) {
+      if(event.type==='pointerup' && p.moved && performance.now()-p.lastTime<100) {
+        velocityX=p.vx;velocityY=p.vy;
         draw();
-      }
+      } else {velocityX=velocityY=0;}
+      scheduleSave();
+    }
+    if(canvas.hasPointerCapture(event.pointerId))canvas.releasePointerCapture(event.pointerId);
+    canvas.style.cursor='grab';
+  }
+  canvas.addEventListener('pointerup',finishPointer);
+  canvas.addEventListener('pointercancel',finishPointer);
+  canvas.addEventListener('lostpointercapture',event=>{
+    if(pointer&&pointer.id===event.pointerId) {pointer=null;velocityX=velocityY=0;scheduleSave();}
+  });
+  canvas.addEventListener('pointerleave',()=>{if(!pointer)canvas.style.cursor='grab';});
 
-      document.getElementById('home').addEventListener('click', () => centerOn(0, 0));
-      document.getElementById('open').addEventListener('click', () => {
-        if (!white.size) return;
-        const index = Math.floor(Math.random() * white.size);
-        let i = 0;
-        for (const cell of white) {
-          if (i++ === index) {
-            const [x, y] = cell.split(',').map(Number);
-            centerOn(x, y);
-            break;
-          }
-        }
-      });
-
-      function flip(x, y) {
-        const cell = key(x, y);
-        if (white.has(cell)) white.delete(cell);
-        else white.add(cell);
-      }
-
-      canvas.addEventListener('wheel', event => {
-        event.preventDefault(); // Wheel zooms the board, never scrolls the page.
-        const rect = canvas.getBoundingClientRect();
-        zoomAnchorX = event.clientX - rect.left;
-        zoomAnchorY = event.clientY - rect.top;
-        // Wheel events may use pixels, lines, or pages.
-        const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? height : 1);
-        targetScale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM,
-          targetScale * Math.exp(-Math.max(-160, Math.min(160, delta)) * ZOOM_SENSITIVITY)));
-        draw();
-      }, { passive: false });
-
-      canvas.addEventListener('pointerdown', event => {
-        if (pointer || (event.pointerType === 'mouse' && event.button !== 0)) return;
-        event.preventDefault();
-        const { x, y } = cellAt(event.clientX, event.clientY);
-        pointer = { id: event.pointerId, x: event.clientX, y: event.clientY,
-          lastX: event.clientX, lastY: event.clientY, moved: false,
-          whiteCell: white.has(key(x, y)), cellX: x, cellY: y };
-        canvas.setPointerCapture(event.pointerId);
-        canvas.style.cursor = pointer.whiteCell ? 'pointer' : 'grabbing';
-      });
-
-      canvas.addEventListener('pointermove', event => {
-        if (pointer && pointer.id === event.pointerId) {
-          if (Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y) > 5) pointer.moved = true;
-          if (!pointer.whiteCell) {
-            originX += event.clientX - pointer.lastX;
-            originY += event.clientY - pointer.lastY;
-            draw();
-          }
-          pointer.lastX = event.clientX;
-          pointer.lastY = event.clientY;
-        } else if (!pointer) {
-          const { x, y } = cellAt(event.clientX, event.clientY);
-          canvas.style.cursor = white.has(key(x, y)) ? 'pointer' : 'grab';
-        }
-      });
-
-      function finishPointer(event) {
-        if (!pointer || pointer.id !== event.pointerId) return;
-        const p = pointer;
-        pointer = null;
-        if (p.whiteCell && !p.moved && event.type === 'pointerup') {
-          const { x, y } = cellAt(event.clientX, event.clientY);
-          if (x === p.cellX && y === p.cellY && white.has(key(x, y))) {
-            white.delete(key(x, y));
-            for (const [dx, dy] of neighbors) flip(x + dx, y + dy);
-            draw();
-          }
-        }
-        if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
-        canvas.style.cursor = 'grab';
-      }
-
-      canvas.addEventListener('pointerup', finishPointer);
-      canvas.addEventListener('pointercancel', finishPointer);
-      canvas.addEventListener('pointerleave', () => { if (!pointer) canvas.style.cursor = 'grab'; });
-      window.addEventListener('keydown', event => {
-        if (event.key.toLowerCase() === 'r' && !event.repeat) {
-          white.clear();
-          white.add('0,0');
-          scale = targetScale = 1;
-          originX = Math.floor((width - SIZE) / 2);
-          originY = Math.floor((height - SIZE) / 2);
-          draw();
-        }
-      });
-      window.addEventListener('resize', resize);
-      resize();
-    })();
+  document.getElementById('home').addEventListener('click',()=>{closeMenu();centerTravel(0,0);});
+  document.getElementById('square').addEventListener('click',()=>{
+    closeMenu();
+    if(!white.size)return;
+    const position=Math.floor(Math.random()*white.size);
+    let i=0;
+    for(const cell of white) if(i++===position) {
+      const [x,y]=cell.split(',').map(Number);
+      centerTravel(x,y);break;
+    }
+  });
+  document.getElementById('save').addEventListener('click',()=>{closeMenu();saveWorld(true);});
+  document.getElementById('export').addEventListener('click',()=>{closeMenu();showCode('export');});
+  document.getElementById('import').addEventListener('click',()=>{closeMenu();showCode('import');});
+  document.getElementById('snapshot').addEventListener('click',()=>{closeMenu();worldSnapshot();});
+  document.getElementById('new-world').addEventListener('click',()=>{closeMenu();newWorld();});
+  document.getElementById('code-close').addEventListener('click',()=>dialog.close());
+  codeAction.addEventListener('click',runCodeAction);
+  document.addEventListener('pointerdown',event=>{if(menu.open&&!menu.contains(event.target))closeMenu();});
+  window.addEventListener('keydown',event=>{
+    if(event.key==='Escape')closeMenu();
+    if(event.key.toLowerCase()==='r'&&!event.repeat&&!dialog.open
+       &&!event.target.closest('input,textarea,button,summary'))newWorld();
+  });
+  window.addEventListener('resize',()=>{resize();scheduleSave();});
+  document.addEventListener('visibilitychange',()=>{if(document.hidden)saveWorld();});
+  window.addEventListener('pagehide',()=>saveWorld());
+  resize();
+  restoreWorld();
+  updateCounter();
+  draw();
+})();
   </script>
 </body>
 </html>
