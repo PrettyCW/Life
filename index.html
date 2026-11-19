@@ -10,11 +10,19 @@
     html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #000; }
     body { overscroll-behavior: none; }
     canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; outline: none; }
+    .controls { position: fixed; top: max(12px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right)); z-index: 1; display: flex; gap: 8px; }
+    .controls button { appearance: none; border: 1px solid rgba(255,255,255,.27); border-radius: 5px; padding: 7px 12px; background: rgba(0,0,0,.82); color: #fff; font: 500 12px/1.2 system-ui, sans-serif; cursor: pointer; }
+    .controls button:hover, .controls button:focus-visible { background: #252525; border-color: rgba(255,255,255,.65); }
+    .controls button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
     .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   </style>
 </head>
 <body>
-  <p class="sr-only" id="instructions">Click a white square to turn it black and toggle the squares directly above, below, left, and right. Drag from a black square to pan freely around the infinite board. Use the scroll wheel to gently zoom in and out around your cursor. Press R to reset.</p>
+  <p class="sr-only" id="instructions">Click a white square to turn it black and toggle the squares directly above, below, left, and right. Drag from a black square to pan freely around the infinite board. Use the scroll wheel to gently zoom in and out around your cursor. Home returns to the original center and zoom. Open finds a random white square and centers it at the original zoom. Press R to reset.</p>
+  <nav class="controls" aria-label="View controls">
+    <button type="button" id="open" title="Jump to a random white square">Open</button>
+    <button type="button" id="home" title="Return to the original center">Home</button>
+  </nav>
   <canvas id="board" aria-label="Infinite square-flipping game" aria-describedby="instructions"></canvas>
   <script>
     (() => {
@@ -95,6 +103,28 @@
           y: Math.floor((clientY - bounds.top - originY) / (SIZE * scale))
         };
       }
+
+      // Recenter the camera without changing which squares are white.
+      function centerOn(x, y) {
+        scale = targetScale = 1;
+        originX = (width - SIZE) / 2 - x * SIZE;
+        originY = (height - SIZE) / 2 - y * SIZE;
+        draw();
+      }
+
+      document.getElementById('home').addEventListener('click', () => centerOn(0, 0));
+      document.getElementById('open').addEventListener('click', () => {
+        if (!white.size) return;
+        const index = Math.floor(Math.random() * white.size);
+        let i = 0;
+        for (const cell of white) {
+          if (i++ === index) {
+            const [x, y] = cell.split(',').map(Number);
+            centerOn(x, y);
+            break;
+          }
+        }
+      });
 
       function flip(x, y) {
         const cell = key(x, y);
