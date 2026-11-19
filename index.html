@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#000000" />
+  <meta name="description" content="One white square. Click it and watch the pattern grow." />
+  <title>Life</title>
+  <style>
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #000; }
+    body { overscroll-behavior: none; }
+    canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; outline: none; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+  </style>
+</head>
+<body>
+  <p class="sr-only" id="instructions">Click a white square to turn it black and toggle the squares directly above, below, left, and right. Drag from a black square to pan freely around the infinite board. Press R to reset.</p>
+  <canvas id="board" aria-label="Infinite square-flipping game" aria-describedby="instructions"></canvas>
+  <script>
+    (() => {
+      'use strict';
+
+      const SIZE = 32;
+      const canvas = document.getElementById('board');
+      const ctx = canvas.getContext('2d', { alpha: false });
+      const white = new Set(['0,0']);
+      const neighbors = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+      const key = (x, y) => `${x},${y}`;
+      let width = 0, height = 0, originX = 0, originY = 0;
+      let initialized = false, pointer = null, frame = 0;
+
+      function render() {
+        frame = 0;
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, width, height);
+        ctx.fillStyle = '#fff';
+        for (const cell of white) {
+          const [x, y] = cell.split(',').map(Number);
+          const left = originX + x * SIZE;
+          const top = originY + y * SIZE;
+          if (left + SIZE > 0 && left < width && top + SIZE > 0 && top < height) {
+            ctx.fillRect(left, top, SIZE, SIZE);
+          }
+        }
+      }
+
+      function draw() {
+        if (!frame) frame = requestAnimationFrame(render);
+      }
+
+      function resize() {
+        const newWidth = window.innerWidth, newHeight = window.innerHeight;
+        if (!initialized) {
+          originX = Math.floor((newWidth - SIZE) / 2);
+          originY = Math.floor((newHeight - SIZE) / 2);
+          initialized = true;
+        } else {
+          originX += (newWidth - width) / 2;
+          originY += (newHeight - height) / 2;
+        }
+        width = newWidth;
+        height = newHeight;
+        const ratio = Math.min(window.devicePixelRatio || 1, 3);
+        canvas.width = Math.round(width * ratio);
+        canvas.height = Math.round(height * ratio);
+        ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+        draw();
+      }
+
+      function cellAt(clientX, clientY) {
+        const bounds = canvas.getBoundingClientRect();
+        return {
+          x: Math.floor((clientX - bounds.left - originX) / SIZE),
+          y: Math.floor((clientY - bounds.top - originY) / SIZE)
+        };
+      }
+
+      function flip(x, y) {
+        const cell = key(x, y);
+        if (white.has(cell)) white.delete(cell);
+        else white.add(cell);
+      }
+
+      canvas.addEventListener('pointerdown', event => {
+        if (pointer || (event.pointerType === 'mouse' && event.button !== 0)) return;
+        event.preventDefault();
+        const { x, y } = cellAt(event.clientX, event.clientY);
+        pointer = { id: event.pointerId, x: event.clientX, y: event.clientY,
+          lastX: event.clientX, lastY: event.clientY, moved: false,
+          whiteCell: white.has(key(x, y)), cellX: x, cellY: y };
+        canvas.setPointerCapture(event.pointerId);
+        canvas.style.cursor = pointer.whiteCell ? 'pointer' : 'grabbing';
+      });
+
+      canvas.addEventListener('pointermove', event => {
+        if (pointer && pointer.id === event.pointerId) {
+          if (Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y) > 5) pointer.moved = true;
+          if (!pointer.whiteCell) {
+            originX += event.clientX - pointer.lastX;
+            originY += event.clientY - pointer.lastY;
+            draw();
+          }
+          pointer.lastX = event.clientX;
+          pointer.lastY = event.clientY;
+        } else if (!pointer) {
+          const { x, y } = cellAt(event.clientX, event.clientY);
+          canvas.style.cursor = white.has(key(x, y)) ? 'pointer' : 'grab';
+        }
+      });
+
+      function finishPointer(event) {
+        if (!pointer || pointer.id !== event.pointerId) return;
+        const p = pointer;
+        pointer = null;
+        if (p.whiteCell && !p.moved && event.type === 'pointerup') {
+          const { x, y } = cellAt(event.clientX, event.clientY);
+          if (x === p.cellX && y === p.cellY && white.has(key(x, y))) {
+            white.delete(key(x, y));
+            for (const [dx, dy] of neighbors) flip(x + dx, y + dy);
+            draw();
+          }
+        }
+        if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+        canvas.style.cursor = 'grab';
+      }
+
+      canvas.addEventListener('pointerup', finishPointer);
+      canvas.addEventListener('pointercancel', finishPointer);
+      canvas.addEventListener('pointerleave', () => { if (!pointer) canvas.style.cursor = 'grab'; });
+      window.addEventListener('keydown', event => {
+        if (event.key.toLowerCase() === 'r' && !event.repeat) {
+          white.clear();
+          white.add('0,0');
+          originX = Math.floor((width - SIZE) / 2);
+          originY = Math.floor((height - SIZE) / 2);
+          draw();
+        }
+      });
+      window.addEventListener('resize', resize);
+      resize();
+    })();
+  </script>
+</body>
+</html>
