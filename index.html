@@ -22,6 +22,9 @@
     .menu-items button { display:block; width:100%; padding:9px 11px; border:0; border-radius:4px; background:transparent; color:white; text-align:left; }
     .menu-items button:hover:not(:disabled),.menu-items button:focus-visible { background:#303030; }
     .menu-items hr { margin:5px 7px; border:0; border-top:1px solid #333; }
+    .menu-items button[hidden] { display:none; }
+    .menu-items button.selected { color:#fff; background:#252525; }
+    .menu-label { padding:7px 11px 4px; color:#999; font:500 10px/1.3 system-ui,sans-serif; letter-spacing:.08em; text-transform:uppercase; }
     .menu > summary:focus-visible, button:focus-visible, textarea:focus-visible { outline:2px solid #fff; outline-offset:2px; }
     #counter { position:fixed; z-index:2; bottom:max(14px,env(safe-area-inset-bottom)); left:max(14px,env(safe-area-inset-left)); color:#999; font:400 11px/1.3 system-ui,sans-serif; pointer-events:none; user-select:none; font-variant-numeric:tabular-nums; }
     #toast { position:fixed; z-index:8; bottom:max(40px,env(safe-area-inset-bottom)); left:50%; transform:translateX(-50%); max-width:min(90vw,500px); padding:9px 14px; border:1px solid #454545; border-radius:7px; color:#fff; background:#181818ee; font-size:12px; text-align:center; pointer-events:none; opacity:0; transition:opacity .2s; }
@@ -38,11 +41,16 @@
   </style>
 </head>
 <body>
-  <p class="sr-only" id="instructions">Click a white square to turn it black and flip the four adjacent squares. Drag from black to pan, and fling to coast. Use the wheel to zoom. Menu contains Home, Square, saving, import/export, and World Snapshot. R starts a new world with confirmation.</p>
+  <p class="sr-only" id="instructions">Click a white square to turn it black and flip the four adjacent squares. Drag from black to pan, and fling to coast. Use the wheel to zoom. Choose Manual World or Auto World from the menu. Auto World flips a random white square every five seconds and can be paused; manual clicks work in both worlds. The worlds save independently. Menu also contains Home, Square, saving, import/export, and World Snapshot. R starts a new world with confirmation.</p>
   <canvas id="board" aria-label="Infinite square-flipping game" aria-describedby="instructions"></canvas>
   <details class="menu" id="menu">
     <summary>Menu ▾</summary>
     <div class="menu-items">
+      <div class="menu-label">Worlds</div>
+      <button id="mode-manual" type="button">✓ Manual World</button>
+      <button id="mode-auto" type="button">Auto World</button>
+      <button id="pause-auto" type="button" hidden>Pause Auto</button>
+      <hr>
       <button id="home" type="button">Home</button>
       <button id="square" type="button">Square</button>
       <hr>
@@ -73,7 +81,13 @@
   const MIN_ZOOM = 0.035;
   const MAX_ZOOM = 40;
   const ZOOM_SENSITIVITY = 0.00065;
-  const STORAGE_KEY = 'life.world.v1';
+  const STORAGE_KEY = 'life.world.v1'; // Keep existing manual saves unchanged.
+  const AUTO_STORAGE_KEY = 'life.world.auto.v1';
+  const MODE_STORAGE_KEY = 'life.mode.v1';
+  const AUTO_STARTED_KEY = 'life.auto.started.v1';
+  const AUTO_PAUSED_KEY = 'life.auto.paused.v1';
+  const AUTO_INTERVAL = 5000;
+  const AUTO_PULSE_DURATION = 420;
   const MAX_CELLS = 500000;
   const MAX_CODE_LENGTH = 10000000;
   const neighbors = [[0,-1], [1,0], [0,1], [-1,0]];
@@ -89,7 +103,10 @@
   const codeAction = document.getElementById('code-action');
 
   const key = (x,y) => x + ',' + y;
-  const white = new Set(['0,0']);
+  const worlds = {manual:new Set(['0,0']),auto:new Set(['0,0'])};
+  const views = {manual:{x:0,y:0,z:1},auto:{x:0,y:0,z:1}};
+  let mode='manual', white=worlds.manual, autoStarted=false, autoPaused=false;
+  let autoTimer=0, autoPulseTimer=0, pulseCell=null, pulseStart=0;
   let width=0, height=0, originX=0, originY=0, scale=1;
   let targetX=0, targetY=0, targetScale=1;
   let velocityX=0, velocityY=0, pointer=null;
@@ -104,8 +121,25 @@
 
   function updateCounter() {
     const amount = white.size;
-    counter.textContent = amount.toLocaleString() + ' white square' + (amount === 1 ? '' : 's');
+    const name=mode==='auto'?'Auto':'Manual';
+    counter.textContent = name+' · '+amount.toLocaleString()+' white square'+(amount===1?'':'s')
+      +(mode==='auto'&&autoPaused?' · Paused':'');
     document.getElementById('square').disabled = !amount;
+  }
+
+  function updateModeUI() {
+    const manual=document.getElementById('mode-manual');
+    const auto=document.getElementById('mode-auto');
+    manual.textContent=(mode==='manual'?'✓ ':'')+'Manual World';
+    auto.textContent=(mode==='auto'?'✓ ':'')+'Auto World';
+    manual.classList.toggle('selected',mode==='manual');
+    auto.classList.toggle('selected',mode==='auto');
+    manual.setAttribute('aria-pressed',String(mode==='manual'));
+    auto.setAttribute('aria-pressed',String(mode==='auto'));
+    const pause=document.getElementById('pause-auto');
+    pause.hidden=mode!=='auto';
+    pause.textContent=autoPaused?'Resume Auto':'Pause Auto';
+    updateCounter();
   }
 
   function paint(now) {
@@ -149,6 +183,20 @@
       if (left+size<=0 || left>=width || top+size<=0 || top>=height) continue;
       const px=Math.floor(left), py=Math.floor(top);
       ctx.fillRect(px,py,Math.ceil(left+size)-px,Math.ceil(top+size)-py);
+    }
+    if(mode==='auto' && pulseCell) {
+      const elapsed=Math.max(0,now-pulseStart);
+      if(elapsed<AUTO_PULSE_DURATION) {
+        const [x,y]=pulseCell.split(',').map(Number);
+        const left=originX+x*size, top=originY+y*size;
+        const pad=3+4*(elapsed/AUTO_PULSE_DURATION);
+        if(left+size+pad>0 && left-pad<width && top+size+pad>0 && top-pad<height) {
+          ctx.strokeStyle='rgba(255,255,255,'+(0.35*(1-elapsed/AUTO_PULSE_DURATION))+')';
+          ctx.lineWidth=1.5;
+          ctx.strokeRect(left-pad,top-pad,size+pad*2,size+pad*2);
+        }
+        draw();
+      }
     }
     if (velocityX || velocityY || originX !== targetX || originY !== targetY || scale !== targetScale) draw();
   }
@@ -200,10 +248,102 @@
     };
   }
 
-  function flip(x,y) {
+  function flipIn(cells,x,y) {
     const cell=key(x,y);
-    if (white.has(cell)) white.delete(cell);
-    else white.add(cell);
+    if(cells.has(cell))cells.delete(cell);
+    else cells.add(cell);
+  }
+
+  function flip(x,y) { flipIn(white,x,y); }
+
+  function activateCell(cells,x,y) {
+    if(!cells.has(key(x,y)))return false;
+    cells.delete(key(x,y));
+    for(const [dx,dy] of neighbors)flipIn(cells,x+dx,y+dy);
+    return true;
+  }
+
+  function randomCell(cells) {
+    if(!cells.size)return null;
+    const selected=Math.floor(Math.random()*cells.size);
+    let i=0;
+    for(const cell of cells)if(i++===selected)return cell;
+    return null;
+  }
+
+  function savePreferences() {
+    try {
+      localStorage.setItem(MODE_STORAGE_KEY,mode);
+      localStorage.setItem(AUTO_STARTED_KEY,String(autoStarted));
+      localStorage.setItem(AUTO_PAUSED_KEY,String(autoPaused));
+    } catch(err) {console.warn('Life preferences could not be saved:',err);}
+  }
+
+  function saveAutoInBackground() {
+    try {
+      localStorage.setItem(AUTO_STORAGE_KEY,JSON.stringify({
+        v:1,c:Array.from(worlds.auto,cell=>cell.split(',').map(Number)),view:views.auto
+      }));
+    } catch(err) {toast('Auto World could not be saved. Export a code for backup.');console.warn(err);}
+  }
+
+  function cancelAutoTimers() {
+    clearTimeout(autoTimer);
+    clearTimeout(autoPulseTimer);
+    autoTimer=autoPulseTimer=0;
+    pulseCell=null;
+  }
+
+  function scheduleAutoTick() {
+    if(!autoStarted||autoPaused)return;
+    autoTimer=setTimeout(()=>{
+      autoTimer=0;
+      const chosen=randomCell(worlds.auto);
+      if(!chosen) {scheduleAutoTick();return;}
+      pulseCell=chosen;
+      pulseStart=performance.now();
+      if(mode==='auto')draw();
+      autoPulseTimer=setTimeout(()=>{
+        autoPulseTimer=0;
+        if(autoPaused)return;
+        const active=worlds.auto.has(chosen)?chosen:randomCell(worlds.auto);
+        pulseCell=null;
+        if(active) {
+          const [x,y]=active.split(',').map(Number);
+          activateCell(worlds.auto,x,y);
+          if(mode==='auto') {updateCounter();draw();scheduleSave();}
+          else saveAutoInBackground();
+        }
+        scheduleAutoTick();
+      },AUTO_PULSE_DURATION);
+    },AUTO_INTERVAL-AUTO_PULSE_DURATION);
+  }
+
+  function setAutoPaused(paused) {
+    autoPaused=paused;
+    cancelAutoTimers();
+    if(!autoPaused&&autoStarted)scheduleAutoTick();
+    updateModeUI();
+    savePreferences();
+  }
+
+  function switchWorld(nextMode) {
+    if(nextMode!==mode) {
+      saveWorld();
+      pointer=null;
+      velocityX=velocityY=0;
+      mode=nextMode;
+      white=worlds[mode];
+      const view=views[mode];
+      centerInstant(view.x,view.y,view.z);
+      if(mode==='auto'&&!autoStarted) {
+        autoStarted=true;
+        scheduleAutoTick();
+      }
+      updateModeUI();
+      savePreferences();
+    }
+    closeMenu();
   }
 
   function currentState() {
@@ -251,8 +391,10 @@
     clearTimeout(saveTimer);
     saveTimer=0;
     try {
-      localStorage.setItem(STORAGE_KEY,JSON.stringify(currentState()));
-      if (manual) toast('World saved on this device.');
+      const state=currentState();
+      views[mode]=state.view;
+      localStorage.setItem(mode==='manual'?STORAGE_KEY:AUTO_STORAGE_KEY,JSON.stringify(state));
+      if (manual) toast((mode==='manual'?'Manual':'Auto')+' World saved on this device.');
     } catch(err) {
       toast('Could not save locally. Export your world code for a backup.');
       console.warn('Life save failed:',err);
@@ -265,13 +407,29 @@
   }
 
   function restoreWorld() {
-    try {
-      const raw=localStorage.getItem(STORAGE_KEY);
-      if (raw) applyState(validatedState(JSON.parse(raw)));
-    } catch(err) {
-      console.warn('Life restore failed:',err);
-      toast('Saved world could not be loaded. Starting from one square.');
+    for(const worldName of ['manual','auto']) {
+      try {
+        const raw=localStorage.getItem(worldName==='manual'?STORAGE_KEY:AUTO_STORAGE_KEY);
+        if(!raw)continue;
+        const state=validatedState(JSON.parse(raw));
+        worlds[worldName]=state.cells;
+        views[worldName]={x:state.x,y:state.y,z:state.z};
+      } catch(err) {
+        console.warn('Life '+worldName+' restore failed:',err);
+        toast('A saved world could not be loaded.');
+      }
     }
+    try {
+      autoPaused=localStorage.getItem(AUTO_PAUSED_KEY)==='true';
+      autoStarted=localStorage.getItem(AUTO_STARTED_KEY)==='true'
+        || localStorage.getItem(AUTO_STORAGE_KEY)!==null;
+      mode=localStorage.getItem(MODE_STORAGE_KEY)==='auto'?'auto':'manual';
+    } catch(err) {console.warn('Life preferences unavailable:',err);}
+    white=worlds[mode];
+    const view=views[mode];
+    centerInstant(view.x,view.y,view.z);
+    updateModeUI();
+    if(autoStarted&&!autoPaused)scheduleAutoTick();
   }
 
   function base64url(bytes) {
@@ -470,8 +628,7 @@
     if(p.whiteCell&&!p.moved&&event.type==='pointerup') {
       const {x,y}=cellAt(event.clientX,event.clientY);
       if(x===p.cellX&&y===p.cellY&&white.has(key(x,y))) {
-        white.delete(key(x,y));
-        for(const [dx,dy] of neighbors)flip(x+dx,y+dy);
+        activateCell(white,x,y);
         updateCounter();draw();scheduleSave();
       }
     } else if(!p.whiteCell) {
@@ -491,6 +648,11 @@
   });
   canvas.addEventListener('pointerleave',()=>{if(!pointer)canvas.style.cursor='grab';});
 
+  document.getElementById('mode-manual').addEventListener('click',()=>switchWorld('manual'));
+  document.getElementById('mode-auto').addEventListener('click',()=>switchWorld('auto'));
+  document.getElementById('pause-auto').addEventListener('click',()=>{
+    closeMenu();setAutoPaused(!autoPaused);
+  });
   document.getElementById('home').addEventListener('click',()=>{closeMenu();centerTravel(0,0);});
   document.getElementById('square').addEventListener('click',()=>{
     closeMenu();
@@ -516,8 +678,13 @@
        &&!event.target.closest('input,textarea,button,summary'))newWorld();
   });
   window.addEventListener('resize',()=>{resize();scheduleSave();});
-  document.addEventListener('visibilitychange',()=>{if(document.hidden)saveWorld();});
-  window.addEventListener('pagehide',()=>saveWorld());
+  document.addEventListener('visibilitychange',()=>{
+    if(document.hidden) {saveWorld();if(mode!=='auto'&&autoStarted)saveAutoInBackground();}
+  });
+  window.addEventListener('pagehide',()=>{
+    saveWorld();
+    if(mode!=='auto'&&autoStarted)saveAutoInBackground();
+  });
   resize();
   restoreWorld();
   updateCounter();
