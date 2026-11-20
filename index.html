@@ -87,7 +87,11 @@
   const MIN_ZOOM = 0.035;
   const MAX_ZOOM = 40;
   const ZOOM_SENSITIVITY = 0.00065;
-  const STORAGE_KEY = 'life.world.v1'; // Keep existing manual saves unchanged.
+  const STORAGE_KEY = 'life.world.v1'; // Legacy manual save; keep for migration/fallback.
+  const DB_NAME = 'life-worlds';
+  const DB_STORE = 'worlds';
+  const DB_VERSION = 1;
+  const MAX_STORED_CELLS = 5000000;
   const AUTO_STORAGE_KEY = 'life.world.auto.v1';
   const MODE_STORAGE_KEY = 'life.mode.v1';
   const AUTO_STARTED_KEY = 'life.auto.started.v1';
@@ -117,6 +121,7 @@
   let targetX=0, targetY=0, targetScale=1;
   let velocityX=0, velocityY=0, pointer=null;
   let initialized=false, frame=0, lastFrame=0, saveTimer=0, toastTimer=0, codeMode='export';
+  let worldDB=null, storageReady=false;
 
   function toast(message) {
     toastElement.textContent = message;
@@ -181,14 +186,28 @@
     ctx.fillRect(0,0,width,height);
     ctx.fillStyle='#fff';
     const size=SIZE*scale;
-    for (const cell of white) {
-      const comma = cell.indexOf(',');
-      const x=Number(cell.slice(0,comma));
-      const y=Number(cell.slice(comma+1));
+    function paintSquare(x,y) {
       const left=originX+x*size, top=originY+y*size;
-      if (left+size<=0 || left>=width || top+size<=0 || top>=height) continue;
-      const px=Math.floor(left), py=Math.floor(top);
+      if(left+size<=0||left>=width||top+size<=0||top>=height)return;
+      const px=Math.floor(left),py=Math.floor(top);
       ctx.fillRect(px,py,Math.ceil(left+size)-px,Math.ceil(top+size)-py);
+    }
+    // Adaptive viewport lookup: no per-square spatial index to grow with sparse worlds.
+    // When zoomed far out, scanning existing white squares is cheaper than probing empty space.
+    const minX=Math.floor(-originX/size)-1;
+    const maxX=Math.ceil((width-originX)/size)+1;
+    const minY=Math.floor(-originY/size)-1;
+    const maxY=Math.ceil((height-originY)/size)+1;
+    const candidates=(maxX-minX+1)*(maxY-minY+1);
+    if(candidates<white.size*0.75 && candidates<=180000) {
+      for(let y=minY;y<=maxY;y++)for(let x=minX;x<=maxX;x++) {
+        if(white.has(key(x,y)))paintSquare(x,y);
+      }
+    } else {
+      for(const cell of white) {
+        const comma=cell.indexOf(',');
+        paintSquare(Number(cell.slice(0,comma)),Number(cell.slice(comma+1)));
+      }
     }
     if(mode==='auto' && pulseCell) {
       const elapsed=Math.max(0,now-pulseStart);
@@ -286,11 +305,7 @@
   }
 
   function saveAutoInBackground() {
-    try {
-      localStorage.setItem(AUTO_STORAGE_KEY,JSON.stringify({
-        v:1,c:Array.from(worlds.auto,cell=>cell.split(',').map(Number)),view:views.auto
-      }));
-    } catch(err) {toast('Auto World could not be saved. Export a code for backup.');console.warn(err);}
+    return persistWorld('auto');
   }
 
   function cancelAutoTimers() {
@@ -334,6 +349,7 @@
   }
 
   function switchWorld(nextMode) {
+    if(!storageReady)return;
     if(nextMode!==mode) {
       saveWorld();
       pointer=null;
@@ -352,16 +368,17 @@
     closeMenu();
   }
 
-  function currentState() {
+  function currentView() {
     const duringFling=velocityX!==0 || velocityY!==0;
-    const x=duringFling ? originX : targetX;
-    const y=duringFling ? originY : targetY;
-    const zoom=duringFling ? scale : targetScale;
-    return {
-      v:1,
-      c:Array.from(white,cell=>cell.split(',').map(Number)),
-      view:{ x:(width/2-x)/(SIZE*zoom)-0.5, y:(height/2-y)/(SIZE*zoom)-0.5, z:zoom }
-    };
+    const x=duringFling?originX:targetX;
+    const y=duringFling?originY:targetY;
+    const zoom=duringFling?scale:targetScale;
+    return {x:(width/2-x)/(SIZE*zoom)-0.5,y:(height/2-y)/(SIZE*zoom)-0.5,z:zoom};
+  }
+
+  // Export codes keep their original LIFE1 / LIFE1G format.
+  function currentState() {
+    return {v:1,c:Array.from(white,cell=>cell.split(',').map(Number)),view:currentView()};
   }
 
   function validatedState(data) {
@@ -393,47 +410,178 @@
     updateCounter();
   }
 
+  function legacyKey(name) {
+    return name==='manual'?STORAGE_KEY:AUTO_STORAGE_KEY;
+  }
+
+  function storedTimestamp(item) {
+    return Number.isFinite(item?.updatedAt)?item.updatedAt:0;
+  }
+
+  function openWorldDB() {
+    if(!window.indexedDB)return Promise.resolve(null);
+    return new Promise(resolve=>{
+      let req,settled=false;
+      const finish=db=>{
+        if(settled) {if(db)db.close();return;}
+        settled=true;
+        clearTimeout(timeout);
+        resolve(db);
+      };
+      const timeout=setTimeout(()=>finish(null),4000);
+      try {
+        req=window.indexedDB.open(DB_NAME,DB_VERSION);
+        req.onupgradeneeded=()=>{
+          if(!req.result.objectStoreNames.contains(DB_STORE)) {
+            req.result.createObjectStore(DB_STORE,{keyPath:'mode'});
+          }
+        };
+        req.onsuccess=()=>{
+          const db=req.result;
+          db.onversionchange=()=>db.close();
+          finish(db);
+        };
+        req.onerror=()=>finish(null);
+        req.onblocked=()=>console.warn('Life IndexedDB upgrade blocked by another tab.');
+      } catch(err) {
+        console.warn('Life IndexedDB unavailable:',err);
+        finish(null);
+      }
+    });
+  }
+
+  function getStoredWorld(name) {
+    return new Promise((resolve,reject)=>{
+      try {
+        const tx=worldDB.transaction(DB_STORE,'readonly');
+        const req=tx.objectStore(DB_STORE).get(name);
+        req.onsuccess=()=>resolve(req.result||null);
+        req.onerror=()=>reject(req.error||new Error('IndexedDB read failed'));
+      } catch(err) {reject(err);}
+    });
+  }
+
+  function putStoredWorld(name,cells,view,updatedAt=Date.now()) {
+    return new Promise((resolve,reject)=>{
+      try {
+        const tx=worldDB.transaction(DB_STORE,'readwrite');
+        tx.oncomplete=()=>resolve();
+        tx.onabort=()=>reject(tx.error||new Error('IndexedDB transaction aborted'));
+        tx.onerror=()=>reject(tx.error||new Error('IndexedDB write failed'));
+        // IndexedDB natively clones Sets. No JSON stringify or coordinate-array conversion.
+        tx.objectStore(DB_STORE).put({
+          mode:name,v:2,cells,view:{...view},updatedAt
+        });
+      } catch(err) {reject(err);}
+    });
+  }
+
+  function validatedStoredWorld(data) {
+    if(!data||data.v!==2||!(data.cells instanceof Set)||data.cells.size>MAX_STORED_CELLS) {
+      throw new Error('Unsupported stored Life world');
+    }
+    const cells=new Set();
+    for(const cell of data.cells) {
+      if(typeof cell!=='string')throw new Error('Invalid stored square');
+      const comma=cell.indexOf(',');
+      if(comma<=0||comma!==cell.lastIndexOf(','))throw new Error('Invalid stored square');
+      const x=Number(cell.slice(0,comma)),y=Number(cell.slice(comma+1));
+      if(!Number.isSafeInteger(x)||!Number.isSafeInteger(y)
+        ||Math.abs(x)>100000000||Math.abs(y)>100000000)throw new Error('Invalid stored coordinates');
+      cells.add(key(x,y));
+    }
+    const view=data.view||{};
+    const valid=Number.isFinite(view.x)&&Number.isFinite(view.y)&&Number.isFinite(view.z)
+      &&Math.abs(view.x)<100000001&&Math.abs(view.y)<100000001;
+    return {cells,x:valid?view.x:0,y:valid?view.y:0,z:valid?Math.max(MIN_ZOOM,Math.min(MAX_ZOOM,view.z)):1};
+  }
+
+  async function persistWorld(name,manual=false) {
+    if(!storageReady)return false;
+    const view=name===mode?currentView():{...views[name]};
+    views[name]=view;
+    const savedAt=Date.now();
+    if(worldDB) {
+      try {
+        await putStoredWorld(name,worlds[name],view,savedAt);
+        if(manual)toast((name==='manual'?'Manual':'Auto')+' World saved on this device.');
+        return true;
+      } catch(err) {console.warn('Life IndexedDB write failed; trying localStorage:',err);}
+    }
+    // Fallback for browsers that disable IndexedDB. Old saves and old codes still work.
+    try {
+      const state={v:1,c:Array.from(worlds[name],cell=>cell.split(',').map(Number)),view,updatedAt:savedAt};
+      localStorage.setItem(legacyKey(name),JSON.stringify(state));
+      if(manual)toast((name==='manual'?'Manual':'Auto')+' World saved on this device.');
+      return true;
+    } catch(err) {
+      console.warn('Life fallback save failed:',err);
+      toast('World could not be saved. Export a code for backup.');
+      return false;
+    }
+  }
+
   function saveWorld(manual=false) {
     clearTimeout(saveTimer);
     saveTimer=0;
-    try {
-      const state=currentState();
-      views[mode]=state.view;
-      localStorage.setItem(mode==='manual'?STORAGE_KEY:AUTO_STORAGE_KEY,JSON.stringify(state));
-      if (manual) toast((mode==='manual'?'Manual':'Auto')+' World saved on this device.');
-    } catch(err) {
-      toast('Could not save locally. Export your world code for a backup.');
-      console.warn('Life save failed:',err);
-    }
+    return persistWorld(mode,manual);
   }
 
   function scheduleSave() {
     clearTimeout(saveTimer);
-    saveTimer=setTimeout(() => saveWorld(), 650);
+    saveTimer=setTimeout(()=>saveWorld(),650);
   }
 
-  function restoreWorld() {
-    for(const worldName of ['manual','auto']) {
+  async function restoreWorld() {
+    worldDB=await openWorldDB();
+    for(const name of ['manual','auto']) {
+      let dbRecord=null,legacyRecord=null,chosen=null,legacyChosen=false;
+      const oldKey=legacyKey(name);
+      if(worldDB) {
+        try {dbRecord=await getStoredWorld(name);} catch(err) {console.warn('Life world read failed:',err);}
+      }
       try {
-        const raw=localStorage.getItem(worldName==='manual'?STORAGE_KEY:AUTO_STORAGE_KEY);
-        if(!raw)continue;
-        const state=validatedState(JSON.parse(raw));
-        worlds[worldName]=state.cells;
-        views[worldName]={x:state.x,y:state.y,z:state.z};
-      } catch(err) {
-        console.warn('Life '+worldName+' restore failed:',err);
-        toast('A saved world could not be loaded.');
+        const raw=localStorage.getItem(oldKey);
+        if(raw)legacyRecord=JSON.parse(raw);
+      } catch(err) {console.warn('Life legacy save read failed:',err);}
+      if(dbRecord&&storedTimestamp(dbRecord)>=storedTimestamp(legacyRecord)) {
+        try {chosen=validatedStoredWorld(dbRecord);}
+        catch(err) {console.warn('Life IndexedDB record invalid:',err);}
+      }
+      if(!chosen&&legacyRecord) {
+        try {chosen=validatedState(legacyRecord);legacyChosen=true;}
+        catch(err) {console.warn('Life legacy record invalid:',err);}
+      }
+      if(!chosen&&dbRecord&&!legacyChosen) {
+        try {chosen=validatedStoredWorld(dbRecord);}
+        catch(err) {console.warn('Life stored record invalid:',err);}
+      }
+      if(!chosen)continue;
+      worlds[name]=chosen.cells;
+      views[name]={x:chosen.x,y:chosen.y,z:chosen.z};
+      if(worldDB) {
+        if(legacyChosen) {
+          // Only remove the legacy copy after its new IndexedDB record has committed.
+          try {
+            await putStoredWorld(name,chosen.cells,views[name],Date.now());
+            localStorage.removeItem(oldKey);
+          } catch(err) {console.warn('Life migration deferred; original save retained:',err);}
+        } else if(legacyRecord) {
+          try {localStorage.removeItem(oldKey);} catch(err) {console.warn(err);}
+        }
       }
     }
     try {
       autoPaused=localStorage.getItem(AUTO_PAUSED_KEY)==='true';
       autoStarted=localStorage.getItem(AUTO_STARTED_KEY)==='true'
-        || localStorage.getItem(AUTO_STORAGE_KEY)!==null;
+        || !!worlds.auto.size && localStorage.getItem(AUTO_STORAGE_KEY)!==null
+        || !!(worldDB && await getStoredWorld('auto').catch(()=>null));
       mode=localStorage.getItem(MODE_STORAGE_KEY)==='auto'?'auto':'manual';
     } catch(err) {console.warn('Life preferences unavailable:',err);}
     white=worlds[mode];
     const view=views[mode];
     centerInstant(view.x,view.y,view.z);
+    storageReady=true;
     updateModeUI();
     if(autoStarted&&!autoPaused)scheduleAutoTick();
   }
@@ -482,6 +630,7 @@
   function closeMenu() { menu.open=false; }
 
   async function showCode(mode) {
+    if(!storageReady)return;
     codeMode=mode;
     codeTitle.textContent=mode==='export'?'Export Code':'Import Code';
     codeHint.textContent=mode==='export'
@@ -567,6 +716,7 @@
   }
 
   function newWorld() {
+    if(!storageReady)return;
     if(!window.confirm('Start a new world? Your current world will be replaced. Export a code first to keep a copy.')) return;
     white.clear();white.add('0,0');
     centerInstant(0,0,1);
@@ -577,6 +727,7 @@
   // Smooth zoom anchored at the pointer. The page itself never scrolls.
   canvas.addEventListener('wheel',event=>{
     event.preventDefault();
+    if(!storageReady)return;
     const rect=canvas.getBoundingClientRect();
     const px=event.clientX-rect.left,py=event.clientY-rect.top;
     const delta=event.deltaY*(event.deltaMode===1?16:event.deltaMode===2?height:1);
@@ -591,6 +742,7 @@
   },{passive:false});
 
   canvas.addEventListener('pointerdown',event=>{
+    if(!storageReady)return;
     if(pointer||(event.pointerType==='mouse'&&event.button!==0)) return;
     event.preventDefault();
     const {x,y}=cellAt(event.clientX,event.clientY);
@@ -694,9 +846,14 @@
     if(mode!=='auto'&&autoStarted)saveAutoInBackground();
   });
   resize();
-  restoreWorld();
   updateCounter();
   draw();
+  restoreWorld().catch(err=>{
+    console.error('Life world initialization failed:',err);
+    storageReady=true;
+    updateModeUI();
+    toast('World storage unavailable. Export a code to back up progress.');
+  });
 })();
   </script>
 </body>
