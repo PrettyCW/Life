@@ -14,7 +14,10 @@
     button, summary { font:500 12px/1.3 system-ui,-apple-system,sans-serif; }
     button { cursor:pointer; }
     button:disabled { opacity:.35; cursor:not-allowed; }
-    .menu { position:fixed; z-index:5; top:max(12px,env(safe-area-inset-top)); right:max(12px,env(safe-area-inset-right)); color:#fff; }
+    .top-controls { position:fixed; z-index:5; top:max(12px,env(safe-area-inset-top)); right:max(12px,env(safe-area-inset-right)); display:flex; align-items:flex-start; gap:8px; color:#fff; }
+    .top-controls > button { appearance:none; padding:8px 13px; border:1px solid #555; border-radius:6px; background:#080808ec; color:#fff; }
+    .top-controls > button:hover { border-color:#999; background:#1b1b1b; }
+    .menu { position:relative; color:#fff; }
     .menu > summary { cursor:pointer; user-select:none; list-style:none; padding:8px 13px; border:1px solid #555; border-radius:6px; background:#080808ec; text-align:center; }
     .menu > summary::-webkit-details-marker { display:none; }
     .menu[open] > summary { border-color:#999; }
@@ -43,8 +46,10 @@
 <body>
   <p class="sr-only" id="instructions">Click a white square to turn it black and flip the four adjacent squares. Drag from black to pan, and fling to coast. Use the wheel to zoom. Choose Manual World or Auto World from the menu. Auto World flips a random white square every five seconds and can be paused; manual clicks work in both worlds. The worlds save independently. Menu also contains Home, Square, saving, import/export, and World Snapshot. R starts a new world with confirmation.</p>
   <canvas id="board" aria-label="Infinite square-flipping game" aria-describedby="instructions"></canvas>
-  <details class="menu" id="menu">
-    <summary>Menu ▾</summary>
+  <div class="top-controls">
+    <button type="button" id="home-quick" aria-label="Home: return to original center at 100% zoom">Home</button>
+    <details class="menu" id="menu">
+      <summary>Menu ▾</summary>
     <div class="menu-items">
       <div class="menu-label">Worlds</div>
       <button id="mode-manual" type="button">✓ Manual World</button>
@@ -61,7 +66,8 @@
       <hr>
       <button id="new-world" type="button">New World</button>
     </div>
-  </details>
+    </details>
+  </div>
   <div id="counter" aria-live="off">1 white square</div>
   <div id="toast" role="status" aria-live="polite"></div>
   <dialog id="code-dialog" aria-labelledby="code-title">
@@ -653,7 +659,9 @@
   document.getElementById('pause-auto').addEventListener('click',()=>{
     closeMenu();setAutoPaused(!autoPaused);
   });
-  document.getElementById('home').addEventListener('click',()=>{closeMenu();centerTravel(0,0);});
+  function goHome() {closeMenu();centerTravel(0,0);}
+  document.getElementById('home').addEventListener('click',goHome);
+  document.getElementById('home-quick').addEventListener('click',goHome);
   document.getElementById('square').addEventListener('click',()=>{
     closeMenu();
     if(!white.size)return;
